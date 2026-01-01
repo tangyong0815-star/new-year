@@ -4,11 +4,12 @@
 */
 
 
-import React, { useState, useEffect } from 'react';
-import { Heart, Zap, Trophy, MapPin, Diamond, Rocket, ArrowUpCircle, Shield, Activity, PlusCircle, Play } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Heart, Zap, Trophy, MapPin, Diamond, Rocket, ArrowUpCircle, Shield, Activity, PlusCircle, Play, Cpu, Terminal as TerminalIcon } from 'lucide-react';
 import { useStore } from '../../store';
 import { GameStatus, GEMINI_COLORS, ShopItem, RUN_SPEED_BASE } from '../../types';
 import { audio } from '../System/Audio';
+import { GoogleGenAI } from "@google/genai";
 
 // Available Shop Items
 const SHOP_ITEMS: ShopItem[] = [
@@ -44,19 +45,103 @@ const SHOP_ITEMS: ShopItem[] = [
     }
 ];
 
+const TypewriterText: React.FC<{ text: string; delay?: number }> = ({ text, delay = 30 }) => {
+    const [displayedText, setDisplayedText] = useState('');
+    const [index, setIndex] = useState(0);
+
+    useEffect(() => {
+        if (index < text.length) {
+            const timeout = setTimeout(() => {
+                setDisplayedText(prev => prev + text[index]);
+                setIndex(prev => prev + 1);
+            }, delay);
+            return () => clearTimeout(timeout);
+        }
+    }, [index, text, delay]);
+
+    return (
+        <span className="font-mono">
+            {displayedText}
+            {index < text.length && <span className="animate-pulse">_</span>}
+        </span>
+    );
+};
+
+const MissionReport: React.FC = () => {
+    const { score, level, gemsCollected, distance, status, aiReport, setAiReport, isGeneratingReport, setGeneratingReport } = useStore();
+    const fetchedRef = useRef(false);
+
+    useEffect(() => {
+        const fetchReport = async () => {
+            if (fetchedRef.current || aiReport) return;
+            fetchedRef.current = true;
+            setGeneratingReport(true);
+
+            try {
+                const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+                const prompt = `You are the Synthwave AI Commander of the Gemini Runner project. 
+                Generate a short, 2-sentence mission analysis for the pilot's performance:
+                - Status: ${status}
+                - Score: ${score}
+                - Level Reached: ${level}
+                - Gems: ${gemsCollected}
+                - Distance: ${Math.floor(distance)} LY
+                Use high-tech jargon and a retro-future tone. Be ${status === 'VICTORY' ? 'triumphant' : 'slightly cynical but respectful'}.`;
+
+                const response = await ai.models.generateContent({
+                    model: 'gemini-3-flash-preview',
+                    contents: prompt,
+                });
+
+                setAiReport(response.text || "COMMUNICATION LINK SEVERED. UNABLE TO RETRIEVE LOGS.");
+            } catch (error) {
+                console.error("AI Briefing Error:", error);
+                setAiReport("DATA CORRUPTION DETECTED. ANALYTICS OFFLINE.");
+            } finally {
+                setGeneratingReport(false);
+            }
+        };
+
+        if (status === GameStatus.GAME_OVER || status === GameStatus.VICTORY) {
+            fetchReport();
+        }
+    }, [status]);
+
+    return (
+        <div className="w-full max-w-md mt-6 mb-8 bg-black/40 border border-cyan-500/30 rounded-lg p-4 backdrop-blur-sm relative overflow-hidden group">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-transparent via-cyan-500/50 to-transparent"></div>
+            <div className="flex items-center space-x-2 mb-2 text-cyan-400">
+                <TerminalIcon className="w-4 h-4" />
+                <span className="text-[10px] uppercase tracking-[0.2em] font-bold">AI Commander Briefing</span>
+                {isGeneratingReport && <Cpu className="w-3 h-3 animate-spin ml-auto opacity-50" />}
+            </div>
+            
+            <div className="text-sm md:text-base leading-relaxed min-h-[4.5rem]">
+                {isGeneratingReport ? (
+                    <div className="flex items-center space-x-2 text-cyan-500/50">
+                        <span className="animate-pulse">DECRYPTING MISSION LOGS...</span>
+                    </div>
+                ) : (
+                    <div className="text-cyan-100/90 italic">
+                        {aiReport && <TypewriterText text={aiReport} />}
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 const ShopScreen: React.FC = () => {
     const { score, buyItem, closeShop, hasDoubleJump, hasImmortality } = useStore();
     const [items, setItems] = useState<ShopItem[]>([]);
 
     useEffect(() => {
-        // Select 3 random items, filtering out one-time items already bought
         let pool = SHOP_ITEMS.filter(item => {
             if (item.id === 'DOUBLE_JUMP' && hasDoubleJump) return false;
             if (item.id === 'IMMORTAL' && hasImmortality) return false;
             return true;
         });
 
-        // Shuffle and pick 3
         pool = pool.sort(() => 0.5 - Math.random());
         setItems(pool.slice(0, 3));
     }, []);
@@ -108,7 +193,6 @@ export const HUD: React.FC = () => {
   const { score, lives, maxLives, collectedLetters, status, level, restartGame, startGame, gemsCollected, distance, isImmortalityActive, speed } = useStore();
   const target = ['G', 'E', 'M', 'I', 'N', 'I'];
 
-  // Common container style
   const containerClass = "absolute inset-0 pointer-events-none flex flex-col justify-between p-4 md:p-8 z-50";
 
   if (status === GameStatus.SHOP) {
@@ -118,21 +202,14 @@ export const HUD: React.FC = () => {
   if (status === GameStatus.MENU) {
       return (
           <div className="absolute inset-0 flex items-center justify-center z-[100] bg-black/80 backdrop-blur-sm p-4 pointer-events-auto">
-              {/* Card Container */}
               <div className="relative w-full max-w-md rounded-3xl overflow-hidden shadow-[0_0_50px_rgba(0,255,255,0.2)] border border-white/10 animate-in zoom-in-95 duration-500">
-                
-                {/* Image Container - Auto height to fit full image without cropping */}
                 <div className="relative w-full bg-gray-900">
                      <img 
                       src="https://www.gstatic.com/aistudio/starter-apps/gemini_runner/gemini_runner.png" 
                       alt="Gemini Runner Cover" 
                       className="w-full h-auto block"
                      />
-                     
-                     {/* Gradient Overlay for text readability */}
                      <div className="absolute inset-0 bg-gradient-to-t from-[#050011] via-black/30 to-transparent"></div>
-                     
-                     {/* Content positioned at the bottom of the card */}
                      <div className="absolute inset-0 flex flex-col justify-end items-center p-6 pb-8 text-center z-10">
                         <button 
                           onClick={() => { audio.init(); startGame(); }}
@@ -143,7 +220,6 @@ export const HUD: React.FC = () => {
                                 INITIALIZE RUN <Play className="ml-2 w-5 h-5 fill-white" />
                             </span>
                         </button>
-
                         <p className="text-cyan-400/60 text-[10px] md:text-xs font-mono mt-3 tracking-wider">
                             [ ARROWS / SWIPE TO MOVE ]
                         </p>
@@ -160,7 +236,7 @@ export const HUD: React.FC = () => {
               <div className="flex flex-col items-center justify-center min-h-full py-8 px-4">
                 <h1 className="text-4xl md:text-6xl font-black text-white mb-6 drop-shadow-[0_0_10px_rgba(255,0,0,0.8)] font-cyber text-center">GAME OVER</h1>
                 
-                <div className="grid grid-cols-1 gap-3 md:gap-4 text-center mb-8 w-full max-w-md">
+                <div className="grid grid-cols-1 gap-3 md:gap-4 text-center mb-4 w-full max-w-md">
                     <div className="bg-gray-900/80 p-3 md:p-4 rounded-lg border border-gray-700 flex items-center justify-between">
                         <div className="flex items-center text-yellow-400 text-sm md:text-base"><Trophy className="mr-2 w-4 h-4 md:w-5 md:h-5"/> LEVEL</div>
                         <div className="text-xl md:text-2xl font-bold font-mono">{level} / 3</div>
@@ -178,6 +254,8 @@ export const HUD: React.FC = () => {
                         <div className="text-2xl md:text-3xl font-bold font-cyber text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-orange-500">{score.toLocaleString()}</div>
                     </div>
                 </div>
+
+                <MissionReport />
 
                 <button 
                   onClick={() => { audio.init(); restartGame(); }}
@@ -202,7 +280,7 @@ export const HUD: React.FC = () => {
                     THE ANSWER TO THE UNIVERSE HAS BEEN FOUND
                 </p>
                 
-                <div className="grid grid-cols-1 gap-4 text-center mb-8 w-full max-w-md">
+                <div className="grid grid-cols-1 gap-4 text-center mb-4 w-full max-w-md">
                     <div className="bg-black/60 p-6 rounded-xl border border-yellow-500/30 shadow-[0_0_15px_rgba(255,215,0,0.1)]">
                         <div className="text-xs md:text-sm text-gray-400 mb-1 tracking-wider">FINAL SCORE</div>
                         <div className="text-3xl md:text-4xl font-bold font-cyber text-yellow-400">{score.toLocaleString()}</div>
@@ -219,6 +297,8 @@ export const HUD: React.FC = () => {
                      </div>
                 </div>
 
+                <MissionReport />
+
                 <button 
                   onClick={() => { audio.init(); restartGame(); }}
                   className="px-8 md:px-12 py-4 md:py-5 bg-white text-black font-black text-lg md:text-xl rounded hover:scale-105 transition-all shadow-[0_0_40px_rgba(255,255,255,0.3)] tracking-widest"
@@ -232,7 +312,6 @@ export const HUD: React.FC = () => {
 
   return (
     <div className={containerClass}>
-        {/* Top Bar */}
         <div className="flex justify-between items-start w-full">
             <div className="flex flex-col">
                 <div className="text-3xl md:text-5xl font-bold text-cyan-400 drop-shadow-[0_0_10px_#00ffff] font-cyber">
@@ -250,19 +329,16 @@ export const HUD: React.FC = () => {
             </div>
         </div>
         
-        {/* Level Indicator - Moved to Top Center aligned with Score/Hearts */}
         <div className="absolute top-5 left-1/2 transform -translate-x-1/2 text-sm md:text-lg text-purple-300 font-bold tracking-wider font-mono bg-black/50 px-3 py-1 rounded-full border border-purple-500/30 backdrop-blur-sm z-50">
             LEVEL {level} <span className="text-gray-500 text-xs md:text-sm">/ 3</span>
         </div>
 
-        {/* Active Skill Indicator */}
         {isImmortalityActive && (
              <div className="absolute top-24 left-1/2 transform -translate-x-1/2 text-yellow-400 font-bold text-xl md:text-2xl animate-pulse flex items-center drop-shadow-[0_0_10px_gold]">
                  <Shield className="mr-2 fill-yellow-400" /> IMMORTAL
              </div>
         )}
 
-        {/* Gemini Collection Status - Just below Top Bar */}
         <div className="absolute top-16 md:top-24 left-1/2 transform -translate-x-1/2 flex space-x-2 md:space-x-3">
             {target.map((char, idx) => {
                 const isCollected = collectedLetters.includes(idx);
@@ -273,7 +349,6 @@ export const HUD: React.FC = () => {
                         key={idx}
                         style={{
                             borderColor: isCollected ? color : 'rgba(55, 65, 81, 1)',
-                            // Use dark text (almost black) when collected to contrast with neon background
                             color: isCollected ? 'rgba(0, 0, 0, 0.8)' : 'rgba(55, 65, 81, 1)',
                             boxShadow: isCollected ? `0 0 20px ${color}` : 'none',
                             backgroundColor: isCollected ? color : 'rgba(0, 0, 0, 0.9)'
@@ -286,7 +361,6 @@ export const HUD: React.FC = () => {
             })}
         </div>
 
-        {/* Bottom Overlay */}
         <div className="w-full flex justify-end items-end">
              <div className="flex items-center space-x-2 text-cyan-500 opacity-70">
                  <Zap className="w-4 h-4 md:w-6 md:h-6 animate-pulse" />
